@@ -74,12 +74,49 @@ Test rules against sample logs to see rough matches before deploying to producti
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### Two Versions Available
 
+SigmaForge is available in two versions:
+
+1. **Next.js + FastAPI** (Modern, recommended) - See [NEXTJS_SETUP.md](NEXTJS_SETUP.md)
+2. **Streamlit** (Original) - Quick setup below
+
+### Next.js Version (Recommended)
+
+For the modern React-based frontend with FastAPI backend:
+
+**Prerequisites:**
+- Python 3.11+
+- Node.js 18+
+- OpenAI API key
+
+**Setup:**
+```bash
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Start the backend
+cd backend
+export OPENAI_API_KEY='your-api-key-here'
+python main.py
+
+# In a new terminal, start the frontend
+cd frontend
+npm install
+npm run dev
+```
+
+Visit http://localhost:3000 for the Next.js UI.
+
+📖 **Full Next.js setup guide**: [NEXTJS_SETUP.md](NEXTJS_SETUP.md)
+
+### Streamlit Version (Original)
+
+**Prerequisites:**
 - Python 3.11 or higher
 - OpenAI API key
 
-### Installation
+**Installation:**
 
 ```bash
 # Clone the repository
@@ -93,7 +130,7 @@ pip install -r requirements.txt
 export OPENAI_API_KEY='your-api-key-here'
 ```
 
-### Run the Application
+**Run the Application:**
 
 ```bash
 streamlit run app.py
@@ -136,15 +173,29 @@ SigmaForge analyzes the patterns and generates a rule to detect:
 
 ## 🏗️ Architecture
 
-```
-sigmaforge/
-├── config.py          # Configuration and settings
-├── llm_client.py      # OpenAI API wrapper
-├── prompts.py         # Expert system prompts for LLM
-└── core.py            # Core logic (parsing, generation, matching)
+### Project Structure
 
-app.py                 # Streamlit web interface
-tests/test_core.py     # Unit tests
+```
+sigmaforge/                 # Core Python package
+├── config.py              # Configuration and settings
+├── llm_client.py          # OpenAI API wrapper
+├── prompts.py             # Expert system prompts for LLM
+└── core.py                # Core logic (parsing, generation, matching)
+
+backend/                   # FastAPI backend (Next.js version)
+├── main.py               # API endpoints
+└── requirements.txt      # Backend dependencies
+
+frontend/                  # Next.js frontend (modern version)
+├── src/
+│   ├── app/              # Next.js pages
+│   ├── components/       # React components
+│   ├── lib/              # API client
+│   └── types/            # TypeScript types
+└── package.json          # Frontend dependencies
+
+app.py                    # Streamlit web interface (original)
+tests/test_core.py        # Unit tests
 ```
 
 ### Key Design Decisions
@@ -233,7 +284,7 @@ This project was built for the Apart Research Defensive Acceleration Hackathon. 
 
 ---
 
-**Built with**: Python, Streamlit, OpenAI API, Sigma, MITRE ATT&CK
+**Built with**: Python, Next.js, React, TypeScript, FastAPI, Streamlit, OpenAI API, Sigma, MITRE ATT&CK
 
 **Category**: Defensive Cybersecurity & Infrastructure Protection
 
