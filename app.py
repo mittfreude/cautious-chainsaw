@@ -20,6 +20,8 @@ from sigmaforge.core import (
     generate_sigma_rule,
     review_sigma_rule,
     rough_match_logs,
+    validate_sigma_rule,
+    explain_sigma_rule,
 )
 
 # Configure logging
@@ -42,6 +44,8 @@ if "sigma_rule" not in st.session_state:
     st.session_state.sigma_rule = None
 if "generation_time" not in st.session_state:
     st.session_state.generation_time = None
+if "rule_explanation" not in st.session_state:
+    st.session_state.rule_explanation = None
 
 
 def main():
@@ -71,9 +75,21 @@ def main():
         # Input mode selection
         input_mode = st.radio(
             "Input Mode",
-            options=["Threat description", "Example logs"],
-            help="Choose how you want to describe the threat you want to detect.",
+            options=["Threat description", "Example logs", "Existing Sigma rule"],
+            help="Choose how you want to work with Sigma rules.",
         )
+
+        # Environment selection (not shown for Rule Doctor mode)
+        if input_mode != "Existing Sigma rule":
+            st.divider()
+            st.subheader("🎯 Target Environment")
+            target_environment = st.selectbox(
+                "SIEM Platform",
+                options=["Generic Sigma", "Splunk", "Elastic", "Microsoft Sentinel"],
+                help="Select your target SIEM platform. Field names will be adapted to common conventions for your environment.",
+            )
+        else:
+            target_environment = "Generic Sigma"
 
         st.divider()
 
@@ -100,11 +116,16 @@ def main():
         st.subheader("ℹ️ About")
         st.markdown(
             """
-        **SigmaForge** helps you quickly generate Sigma detection rules from:
-        - Natural language threat descriptions
-        - Example log lines showing suspicious activity
+        **SigmaForge** helps you quickly:
+        - Generate Sigma rules from threat descriptions
+        - Create rules from example logs
+        - Understand and improve existing Sigma rules
 
-        This is a **defensive tool** designed to accelerate blue team workflows.
+        **Defensive-Only Tool:**
+        - ✅ Detection rule generation
+        - ✅ Blue team workflow acceleration
+        - ❌ No exploits or offensive capabilities
+        - ❌ No network scanning
         """
         )
 
@@ -114,58 +135,132 @@ def main():
     with col1:
         st.header("📝 Input")
 
-        # Input text area based on mode
-        if input_mode == "Threat description":
-            placeholder_text = """Example: Detect repeated failed SSH login attempts from a single IP address followed by a successful login on the same account within a short time window.
+        # Handle different input modes
+        if input_mode == "Existing Sigma rule":
+            # Rule Doctor mode
+            st.markdown("**Rule Doctor: Explain & Improve Existing Sigma Rules**")
+            st.markdown("Paste any Sigma rule to get a detailed explanation and tuning suggestions.")
+
+            input_text = st.text_area(
+                "Paste Sigma Rule (YAML)",
+                placeholder="""title: Suspicious PowerShell Download
+description: Detects PowerShell downloading content from the internet
+status: experimental
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\\powershell.exe'
+    CommandLine|contains:
+      - 'DownloadString'
+      - 'DownloadFile'
+  condition: selection
+fields:
+  - CommandLine
+  - User
+  - ParentImage
+falsepositives:
+  - Legitimate administrative scripts
+level: medium
+tags:
+  - attack.execution
+  - attack.t1059.001""",
+                height=300,
+                help="Paste an existing Sigma rule in YAML format",
+            )
+
+            explain_button = st.button(
+                "🔍 Explain & Analyze Rule",
+                type="primary",
+                use_container_width=True,
+                disabled=not input_text.strip(),
+            )
+
+            if explain_button and input_text.strip():
+                with st.spinner("Analyzing Sigma rule..."):
+                    try:
+                        llm_client = create_client(model=model_name, temperature=temperature)
+
+                        # Store the original rule
+                        st.session_state.sigma_rule = input_text
+
+                        # Explain the rule
+                        st.session_state.rule_explanation = explain_sigma_rule(
+                            input_text, llm_client
+                        )
+
+                        # Also store a fake threat_json for compatibility
+                        st.session_state.threat_json = {
+                            "logsource": {},
+                            "relevant_fields": [],
+                            "attack_behaviour": st.session_state.rule_explanation["attack_behaviour"],
+                            "possible_mitre_techniques": st.session_state.rule_explanation["coverage"],
+                            "assumptions": [],
+                        }
+
+                        st.success("✅ Rule analyzed successfully!")
+
+                    except Exception as e:
+                        st.error(f"❌ Error analyzing rule: {str(e)}")
+                        logging.error(f"Error during rule explanation: {e}", exc_info=True)
+
+        else:
+            # Threat description or Example logs mode
+            if input_mode == "Threat description":
+                placeholder_text = """Example: Detect repeated failed SSH login attempts from a single IP address followed by a successful login on the same account within a short time window.
 
 Example: Detect suspicious PowerShell execution that downloads a script from pastebin or a URL shortener service."""
-            help_text = "Describe the threat or suspicious behavior you want to detect."
-        else:
-            placeholder_text = """Example log lines (paste 5-20 representative suspicious events):
+                help_text = "Describe the threat or suspicious behavior you want to detect."
+            else:
+                placeholder_text = """Example log lines (paste 5-20 representative suspicious events):
 
 Feb 10 14:23:45 server sshd[1234]: Failed password for admin from 192.168.1.100 port 51234 ssh2
 Feb 10 14:23:48 server sshd[1234]: Failed password for admin from 192.168.1.100 port 51235 ssh2
 Feb 10 14:23:51 server sshd[1234]: Accepted password for admin from 192.168.1.100 port 51236 ssh2"""
-            help_text = "Paste example log lines that represent suspicious activity you want to detect."
+                help_text = "Paste example log lines that represent suspicious activity you want to detect."
 
-        input_text = st.text_area(
-            "Input" if input_mode == "Threat description" else "Example Logs",
-            placeholder=placeholder_text,
-            height=200,
-            help=help_text,
-        )
+            input_text = st.text_area(
+                "Input" if input_mode == "Threat description" else "Example Logs",
+                placeholder=placeholder_text,
+                height=200,
+                help=help_text,
+            )
 
-        # Generate button
-        generate_button = st.button(
-            "🔨 Generate Sigma Rule",
-            type="primary",
-            use_container_width=True,
-            disabled=not input_text.strip(),
-        )
+            # Generate button
+            generate_button = st.button(
+                "🔨 Generate Sigma Rule",
+                type="primary",
+                use_container_width=True,
+                disabled=not input_text.strip(),
+            )
 
-        if generate_button and input_text.strip():
-            with st.spinner("Analyzing threat and generating Sigma rule..."):
-                try:
-                    # Create LLM client
-                    llm_client = create_client(model=model_name, temperature=temperature)
+            if generate_button and input_text.strip():
+                with st.spinner("Analyzing threat and generating Sigma rule..."):
+                    try:
+                        # Create LLM client
+                        llm_client = create_client(model=model_name, temperature=temperature)
 
-                    # Parse threat to JSON
-                    st.session_state.threat_json = parse_threat_to_json(
-                        input_text, llm_client
-                    )
+                        # Clear any previous rule explanation
+                        st.session_state.rule_explanation = None
 
-                    # Generate Sigma rule
-                    st.session_state.sigma_rule = generate_sigma_rule(
-                        st.session_state.threat_json, llm_client
-                    )
+                        # Parse threat to JSON (with environment)
+                        st.session_state.threat_json = parse_threat_to_json(
+                            input_text, llm_client, target_environment
+                        )
 
-                    st.session_state.generation_time = datetime.now()
+                        # Generate Sigma rule (with environment)
+                        st.session_state.sigma_rule = generate_sigma_rule(
+                            st.session_state.threat_json, llm_client, target_environment
+                        )
 
-                    st.success("✅ Sigma rule generated successfully!")
+                        st.session_state.generation_time = datetime.now()
 
-                except Exception as e:
-                    st.error(f"❌ Error generating rule: {str(e)}")
-                    logging.error(f"Error during generation: {e}", exc_info=True)
+                        st.success("✅ Sigma rule generated successfully!")
+
+                    except Exception as e:
+                        st.error(f"❌ Error generating rule: {str(e)}")
+                        logging.error(f"Error during generation: {e}", exc_info=True)
 
         # Review/Improve button (only show if we have a rule)
         if st.session_state.sigma_rule:
@@ -198,49 +293,89 @@ Feb 10 14:23:51 server sshd[1234]: Accepted password for admin from 192.168.1.10
         st.header("📋 Output")
 
         if st.session_state.threat_json and st.session_state.sigma_rule:
-            # Display threat interpretation
-            st.subheader("🎯 Threat Interpretation")
+            # Check if we're in Rule Doctor mode
+            if st.session_state.rule_explanation:
+                # Display Rule Doctor explanation
+                st.subheader("🩺 Rule Analysis")
 
-            threat_info = st.session_state.threat_json
+                explanation = st.session_state.rule_explanation
 
-            # Logsource
-            st.markdown("**Log Source:**")
-            logsource = threat_info.get("logsource", {})
-            st.code(
-                f"Product: {logsource.get('product', 'N/A')}\n"
-                f"Service: {logsource.get('service', 'N/A')}\n"
-                f"Category: {logsource.get('category', 'N/A')}"
-            )
+                # Attack behavior
+                st.markdown("**What This Rule Detects:**")
+                st.info(explanation["attack_behaviour"])
 
-            # Attack behavior
-            st.markdown("**Attack Behavior:**")
-            st.info(threat_info.get("attack_behaviour", "N/A"))
+                # Log source summary
+                st.markdown("**Log Sources:**")
+                st.write(explanation["logsource_summary"])
 
-            # Relevant fields
-            st.markdown("**Relevant Fields:**")
-            fields = threat_info.get("relevant_fields", [])
-            st.write(", ".join(f"`{field}`" for field in fields) if fields else "N/A")
-
-            # MITRE techniques
-            mitre = threat_info.get("possible_mitre_techniques", [])
-            if mitre:
-                st.markdown("**MITRE ATT&CK Techniques:**")
-                for technique in mitre:
+                # MITRE Coverage
+                st.markdown("**MITRE ATT&CK Coverage:**")
+                for technique in explanation["coverage"]:
                     st.write(f"- {technique}")
 
-            # Assumptions
-            assumptions = threat_info.get("assumptions", [])
-            if assumptions:
-                with st.expander("⚠️ Assumptions & Limitations"):
-                    for assumption in assumptions:
-                        st.write(f"- {assumption}")
+                # False positives
+                with st.expander("⚠️ Likely False Positives"):
+                    for fp in explanation["likely_false_positives"]:
+                        st.write(f"- {fp}")
 
-            st.divider()
+                # Tuning suggestions
+                with st.expander("💡 Tuning Suggestions"):
+                    for suggestion in explanation["tuning_suggestions"]:
+                        st.write(f"- {suggestion}")
 
-            # Display Sigma rule
-            st.subheader("📜 Generated Sigma Rule")
+                st.divider()
+
+            else:
+                # Display threat interpretation (normal mode)
+                st.subheader("🎯 Threat Interpretation")
+
+                threat_info = st.session_state.threat_json
+
+                # Logsource
+                st.markdown("**Log Source:**")
+                logsource = threat_info.get("logsource", {})
+                st.code(
+                    f"Product: {logsource.get('product', 'N/A')}\n"
+                    f"Service: {logsource.get('service', 'N/A')}\n"
+                    f"Category: {logsource.get('category', 'N/A')}"
+                )
+
+                # Attack behavior
+                st.markdown("**Attack Behavior:**")
+                st.info(threat_info.get("attack_behaviour", "N/A"))
+
+                # Relevant fields
+                st.markdown("**Relevant Fields:**")
+                fields = threat_info.get("relevant_fields", [])
+                st.write(", ".join(f"`{field}`" for field in fields) if fields else "N/A")
+
+                # MITRE techniques
+                mitre = threat_info.get("possible_mitre_techniques", [])
+                if mitre:
+                    st.markdown("**MITRE ATT&CK Techniques:**")
+                    for technique in mitre:
+                        st.write(f"- {technique}")
+
+                # Assumptions
+                assumptions = threat_info.get("assumptions", [])
+                if assumptions:
+                    with st.expander("⚠️ Assumptions & Limitations"):
+                        for assumption in assumptions:
+                            st.write(f"- {assumption}")
+
+                st.divider()
+
+            # Display Sigma rule (common for all modes)
+            st.subheader("📜 " + ("Original Sigma Rule" if st.session_state.rule_explanation else "Generated Sigma Rule"))
 
             st.code(st.session_state.sigma_rule, language="yaml")
+
+            # pySigma validation
+            is_valid, error_msg = validate_sigma_rule(st.session_state.sigma_rule)
+            if is_valid:
+                st.success("✅ Valid Sigma rule (pySigma validated)")
+            else:
+                st.error(f"❌ Sigma validation error: {error_msg}")
 
             # Download button
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

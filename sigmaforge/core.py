@@ -1,5 +1,8 @@
 """
 Core logic for SigmaForge threat parsing and Sigma rule generation.
+
+This module provides defensive security functionality for generating and analyzing
+Sigma detection rules to help blue teams detect threats.
 """
 
 import json
@@ -14,20 +17,64 @@ from sigmaforge.config import DEFAULT_AUTHOR
 from sigmaforge.llm_client import LLMClient
 from sigmaforge.prompts import (
     get_threat_parsing_prompt,
+    get_threat_parsing_prompt_with_environment,
     get_sigma_generation_prompt,
+    get_sigma_generation_prompt_with_environment,
     get_sigma_review_prompt,
+    get_rule_doctor_prompt,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def parse_threat_to_json(threat_text: str, llm_client: LLMClient) -> dict[str, Any]:
+def validate_sigma_rule(sigma_yaml: str) -> tuple[bool, str | None]:
+    """
+    Validate a Sigma rule using the official pySigma library.
+
+    Args:
+        sigma_yaml: The Sigma rule as a YAML string.
+
+    Returns:
+        A tuple of (is_valid, error_message).
+        - is_valid: True if the rule is valid, False otherwise.
+        - error_message: None if valid, otherwise a string describing the error.
+    """
+    try:
+        # Import pySigma components
+        from sigma.collection import SigmaCollection
+        from sigma.exceptions import SigmaError
+
+        # Parse YAML into dict(s)
+        data = list(yaml.safe_load_all(sigma_yaml))
+
+        # Validate using SigmaCollection
+        SigmaCollection.from_dicts(data)
+
+        logger.info("Sigma rule passed pySigma validation")
+        return True, None
+
+    except SigmaError as e:
+        error_msg = f"Sigma validation error: {str(e)}"
+        logger.warning(error_msg)
+        return False, error_msg
+    except Exception as e:
+        error_msg = f"Unexpected validation error: {str(e)}"
+        logger.error(error_msg)
+        return False, error_msg
+
+
+def parse_threat_to_json(
+    threat_text: str,
+    llm_client: LLMClient,
+    environment: str = "Generic Sigma"
+) -> dict[str, Any]:
     """
     Parse a threat description or example logs into structured JSON.
 
     Args:
         threat_text: Natural language threat description or example log lines.
         llm_client: The LLM client to use for parsing.
+        environment: Target SIEM environment (e.g., "Splunk", "Elastic", "Microsoft Sentinel").
 
     Returns:
         A dictionary containing structured threat information with keys:
@@ -41,9 +88,9 @@ def parse_threat_to_json(threat_text: str, llm_client: LLMClient) -> dict[str, A
         ValueError: If the LLM response is not valid JSON.
         KeyError: If required fields are missing from the parsed JSON.
     """
-    logger.info("Parsing threat description to structured JSON")
+    logger.info(f"Parsing threat description to structured JSON (target: {environment})")
 
-    system_prompt = get_threat_parsing_prompt()
+    system_prompt = get_threat_parsing_prompt_with_environment(environment)
     response = llm_client.chat_completion(system_prompt, threat_text)
 
     # Clean up response - remove markdown code fences if present
@@ -80,13 +127,18 @@ def parse_threat_to_json(threat_text: str, llm_client: LLMClient) -> dict[str, A
     return threat_json
 
 
-def generate_sigma_rule(threat_json: dict[str, Any], llm_client: LLMClient) -> str:
+def generate_sigma_rule(
+    threat_json: dict[str, Any],
+    llm_client: LLMClient,
+    environment: str = "Generic Sigma"
+) -> str:
     """
     Generate a Sigma detection rule from structured threat information.
 
     Args:
         threat_json: Structured threat information (output from parse_threat_to_json).
         llm_client: The LLM client to use for generation.
+        environment: Target SIEM environment (e.g., "Splunk", "Elastic", "Microsoft Sentinel").
 
     Returns:
         A complete Sigma rule as a YAML string.
@@ -94,7 +146,7 @@ def generate_sigma_rule(threat_json: dict[str, Any], llm_client: LLMClient) -> s
     Raises:
         ValueError: If the LLM response is not valid YAML.
     """
-    logger.info("Generating Sigma rule from threat JSON")
+    logger.info(f"Generating Sigma rule from threat JSON (target: {environment})")
 
     # Convert threat_json to a readable prompt for the LLM
     threat_description = json.dumps(threat_json, indent=2)
@@ -104,7 +156,7 @@ def generate_sigma_rule(threat_json: dict[str, Any], llm_client: LLMClient) -> s
 
 Remember to output ONLY the Sigma YAML rule, with no markdown fences or additional text."""
 
-    system_prompt = get_sigma_generation_prompt()
+    system_prompt = get_sigma_generation_prompt_with_environment(environment)
     response = llm_client.chat_completion(system_prompt, user_message)
 
     # Clean up response - remove markdown code fences if present
@@ -279,3 +331,78 @@ def rough_match_logs(sigma_yaml: str, raw_logs: list[str]) -> list[tuple[str, bo
     logger.info(f"Rough matching complete: {matches_count}/{len(raw_logs)} matched")
 
     return results
+
+
+def explain_sigma_rule(sigma_yaml: str, llm_client: LLMClient) -> dict[str, Any]:
+    """
+    Explain and analyze an existing Sigma rule (Rule Doctor mode).
+
+    This function provides a comprehensive explanation of what a Sigma rule does,
+    its MITRE ATT&CK coverage, likely false positives, and tuning suggestions.
+    This is a DEFENSIVE tool to help blue teams understand and improve detection rules.
+
+    Args:
+        sigma_yaml: The Sigma rule as a YAML string.
+        llm_client: The LLM client to use for analysis.
+
+    Returns:
+        A dictionary with keys:
+        - attack_behaviour: str - Natural language explanation of what the rule detects
+        - logsource_summary: str - Explanation of log sources
+        - likely_false_positives: list[str] - Scenarios that might cause false positives
+        - coverage: list[str] - MITRE ATT&CK techniques covered
+        - tuning_suggestions: list[str] - Specific recommendations to improve the rule
+
+    Raises:
+        ValueError: If the Sigma YAML is invalid or LLM response is not valid JSON.
+    """
+    logger.info("Analyzing Sigma rule with Rule Doctor")
+
+    # First validate that the YAML parses
+    try:
+        rule_dict = yaml.safe_load(sigma_yaml)
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid Sigma YAML: {e}")
+
+    # Create the user message with the rule
+    user_message = f"""Analyze this Sigma detection rule:
+
+{sigma_yaml}
+
+Provide a comprehensive explanation following the required JSON format."""
+
+    system_prompt = get_rule_doctor_prompt()
+    response = llm_client.chat_completion(system_prompt, user_message)
+
+    # Clean up response - remove markdown code fences if present
+    cleaned_response = response.strip()
+    if cleaned_response.startswith("```"):
+        lines = cleaned_response.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        cleaned_response = "\n".join(lines)
+
+    # Parse JSON response
+    try:
+        explanation = json.loads(cleaned_response)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON from Rule Doctor response: {e}")
+        logger.error(f"Response was: {cleaned_response[:500]}")
+        raise ValueError(f"LLM did not return valid JSON: {e}")
+
+    # Validate required fields
+    required_fields = [
+        "attack_behaviour",
+        "logsource_summary",
+        "likely_false_positives",
+        "coverage",
+        "tuning_suggestions",
+    ]
+    for field in required_fields:
+        if field not in explanation:
+            raise ValueError(f"Missing required field in Rule Doctor response: {field}")
+
+    logger.info("Successfully analyzed Sigma rule")
+    return explanation

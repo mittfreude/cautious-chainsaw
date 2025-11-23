@@ -1,8 +1,18 @@
 """
 System prompts for LLM interactions in SigmaForge.
+
+This is a defensive-only tool designed to help security teams write detection rules.
 """
 
-THREAT_PARSING_PROMPT = """You are an expert security detection engineer and threat analyst.
+# Environment-specific field hints for SIEM adaptation
+FIELD_HINTS = {
+    "Generic Sigma": ["user", "src_ip", "dst_ip", "process", "command_line", "url", "status_code"],
+    "Splunk": ["src", "dest", "user", "process", "parent_process", "signature", "src_ip", "dest_ip"],
+    "Elastic": ["source.ip", "destination.ip", "user.name", "process.name", "process.command_line", "url.original"],
+    "Microsoft Sentinel": ["SrcIpAddr", "DstIpAddr", "Account", "Process", "CommandLine", "Url", "EventID"]
+}
+
+THREAT_PARSING_PROMPT = """You are an expert security detection engineer and threat analyst working on DEFENSIVE cybersecurity.
 
 Your task is to analyze threat descriptions or example log lines and extract structured information that will be used to create Sigma detection rules.
 
@@ -183,3 +193,123 @@ def get_sigma_generation_prompt() -> str:
 def get_sigma_review_prompt() -> str:
     """Get the system prompt for Sigma rule review and improvement."""
     return SIGMA_REVIEW_PROMPT
+
+
+# Rule Doctor prompt for explaining existing Sigma rules
+RULE_DOCTOR_PROMPT = """You are a senior detection engineer and Sigma rule expert conducting a DEFENSIVE security analysis.
+
+Your task is to analyze an existing Sigma detection rule and provide a comprehensive explanation that helps SOC analysts understand and improve it.
+
+You must respond with ONLY valid JSON in this exact structure:
+
+{
+  "attack_behaviour": "<detailed natural language explanation of what attack behavior this rule detects>",
+  "logsource_summary": "<explanation of what log sources this rule targets and why>",
+  "likely_false_positives": [
+    "<scenario 1 that might trigger false positives>",
+    "<scenario 2>",
+    "..."
+  ],
+  "coverage": [
+    "<MITRE ATT&CK technique ID and name>",
+    "..."
+  ],
+  "tuning_suggestions": [
+    "<specific suggestion to improve the rule>",
+    "<suggestion to reduce false positives>",
+    "..."
+  ]
+}
+
+Guidelines for each field:
+
+**attack_behaviour:**
+- Provide a clear 3-5 sentence explanation of what malicious activity this rule is designed to detect
+- Explain WHY this behavior is suspicious or malicious
+- Use language that a junior analyst can understand
+- Focus on defensive detection, not offensive techniques
+
+**logsource_summary:**
+- Explain what log sources (product, service, category) this rule uses
+- Describe what kind of events should be logged for this rule to work
+- Note any dependencies on specific log collection configurations
+
+**likely_false_positives:**
+- List 3-5 realistic scenarios where this rule might alert on benign activity
+- Be specific about what legitimate operations could trigger the rule
+- Help analysts understand what to filter or tune
+
+**coverage:**
+- List all MITRE ATT&CK techniques this rule covers
+- Format as "T#### - Technique Name" or "T####.### - Sub-technique Name"
+- Include both primary and secondary coverage
+
+**tuning_suggestions:**
+- Provide 3-5 specific, actionable recommendations to improve the rule
+- Suggest ways to reduce false positives without losing detection capability
+- Recommend additional fields to check or filters to add
+- Propose ways to make the rule more resilient to evasion
+- All suggestions must be defensive in nature
+
+Remember:
+- Respond with ONLY the JSON object, nothing else
+- This is a DEFENSIVE tool - focus on helping blue teams
+- Be practical and specific in your recommendations
+- Assume the analyst wants to understand and improve the rule, not evade it
+"""
+
+
+def get_rule_doctor_prompt() -> str:
+    """Get the system prompt for Rule Doctor (explaining existing Sigma rules)."""
+    return RULE_DOCTOR_PROMPT
+
+
+def get_threat_parsing_prompt_with_environment(environment: str) -> str:
+    """
+    Get the threat parsing prompt with environment-specific field hints.
+
+    Args:
+        environment: Target SIEM environment (e.g., "Splunk", "Elastic", "Microsoft Sentinel", "Generic Sigma")
+
+    Returns:
+        Modified threat parsing prompt with environment-specific guidance
+    """
+    field_hints = FIELD_HINTS.get(environment, FIELD_HINTS["Generic Sigma"])
+    field_hint_str = ", ".join(field_hints)
+
+    environment_guidance = f"""
+
+**IMPORTANT - Target Environment: {environment}**
+When selecting relevant_fields, prefer field names commonly used in {environment} environments where appropriate.
+Common field names for {environment}: {field_hint_str}
+
+However, the rule should still be valid generic Sigma YAML that can be converted to different SIEM formats.
+"""
+
+    return THREAT_PARSING_PROMPT + environment_guidance
+
+
+def get_sigma_generation_prompt_with_environment(environment: str) -> str:
+    """
+    Get the Sigma generation prompt with environment-specific field hints.
+
+    Args:
+        environment: Target SIEM environment
+
+    Returns:
+        Modified Sigma generation prompt with environment-specific guidance
+    """
+    field_hints = FIELD_HINTS.get(environment, FIELD_HINTS["Generic Sigma"])
+    field_hint_str = ", ".join(field_hints)
+
+    environment_guidance = f"""
+
+**IMPORTANT - Target Environment: {environment}**
+This rule will be primarily used in {environment} environments.
+Where possible, use field names that are common in {environment}: {field_hint_str}
+
+However, the rule must still be valid generic Sigma YAML following the Sigma specification.
+The goal is to make the rule more immediately useful in {environment} while maintaining portability.
+"""
+
+    return SIGMA_GENERATION_PROMPT + environment_guidance
