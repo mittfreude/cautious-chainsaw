@@ -21,6 +21,11 @@ from sigmaforge.core import (
     review_sigma_rule,
     rough_match_logs,
 )
+from sigmaforge.validation import validate_sigma_rule
+from sigmaforge.conversion import (
+    sigma_to_splunk_queries,
+    sigma_to_elasticsearch_queries,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -250,6 +255,61 @@ Feb 10 14:23:51 server sshd[1234]: Accepted password for admin from 192.168.1.10
                 file_name=f"sigma_rule_{timestamp}.yml",
                 mime="text/yaml",
             )
+
+            # Validation section
+            st.markdown("#### ✅ Rule Validation")
+            is_valid, errors, warnings = validate_sigma_rule(st.session_state.sigma_rule)
+
+            if is_valid:
+                st.success("✅ Valid Sigma rule (passed pySigma validation)")
+                if warnings:
+                    with st.expander("⚠️ Quality Suggestions", expanded=False):
+                        for warning in warnings:
+                            st.warning(warning)
+            else:
+                st.error("❌ Rule has validation errors:")
+                for error in errors:
+                    st.error(f"• {error}")
+                if warnings:
+                    st.markdown("**Warnings:**")
+                    for warning in warnings:
+                        st.warning(f"• {warning}")
+
+            # SIEM Queries section
+            st.markdown("#### 🔍 SIEM Queries")
+            st.markdown(
+                "*Convert this Sigma rule to production-ready queries for your SIEM*"
+            )
+
+            # Splunk queries
+            with st.expander("🟠 Splunk SPL", expanded=True):
+                success, splunk_queries, error_msg = sigma_to_splunk_queries(
+                    st.session_state.sigma_rule
+                )
+                if success and splunk_queries:
+                    for i, query in enumerate(splunk_queries, 1):
+                        if len(splunk_queries) > 1:
+                            st.markdown(f"**Query {i}:**")
+                        st.code(query, language="spl")
+                elif error_msg:
+                    st.warning(f"Could not convert to Splunk query: {error_msg}")
+                else:
+                    st.info("No queries generated")
+
+            # Elasticsearch queries
+            with st.expander("🔵 Elasticsearch (Lucene)", expanded=False):
+                success, es_queries, error_msg = sigma_to_elasticsearch_queries(
+                    st.session_state.sigma_rule
+                )
+                if success and es_queries:
+                    for i, query in enumerate(es_queries, 1):
+                        if len(es_queries) > 1:
+                            st.markdown(f"**Query {i}:**")
+                        st.code(query, language="lucene")
+                elif error_msg:
+                    st.warning(f"Could not convert to Elasticsearch query: {error_msg}")
+                else:
+                    st.info("No queries generated")
 
             st.divider()
 
